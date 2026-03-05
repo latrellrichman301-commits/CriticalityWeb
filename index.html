@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Criticality: Online Multiplayer</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; cursor: pointer; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; touch-action: none; }
+        
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 8px; height: 8px; border: 2px solid rgba(255,255,255,0.9); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; display: none; z-index: 20; box-shadow: 0 0 4px rgba(0,0,0,0.5); }
+        
+        .mobile-controls { display: none; position: absolute; bottom: 30px; width: 100%; justify-content: space-between; padding: 0 30px; box-sizing: border-box; pointer-events: none; z-index: 100; user-select: none; -webkit-user-select: none; }
+        @media (pointer: coarse) { .mobile-controls { display: flex; } }
+        .joystick-zone { width: 120px; height: 120px; background: rgba(255,255,255,0.1); border-radius: 50%; position: relative; pointer-events: auto; border: 2px solid rgba(255,255,255,0.2); }
+        .joystick-knob { width: 50px; height: 50px; background: rgba(255,255,255,0.5); border-radius: 50%; position: absolute; top: 35px; left: 35px; pointer-events: none; }
+        .button-stack { display: flex; flex-direction: column; gap: 15px; pointer-events: auto; }
+        .mobile-btn { width: 70px; height: 70px; background: rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.6); border-radius: 50%; color: white; font-weight: bold; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+        .mobile-btn:active { background: rgba(255,255,255,0.4); }
+
+        /* UI ADDITIONS */
+        #top-bar { position: absolute; top: 15px; left: 15px; z-index: 60; display: flex; align-items: center; gap: 15px; pointer-events: auto; }
+        .menu-icon { width: 40px; height: 40px; background: rgba(20,20,25,0.8); backdrop-filter: blur(5px); border: 1px solid rgba(255,255,255,0.2); border-radius: 10px; display: flex; justify-content: center; align-items: center; cursor: pointer; color: white; font-weight: bold; }
+        .menu-icon:hover { background: rgba(255,255,255,0.2); }
+        #status { color: rgba(255,255,255,0.8); font-size: 14px; font-family: monospace; text-shadow: 1px 1px 2px #000; }
+
+        /* PLAYER LIST */
+        #player-list { position: absolute; top: 15px; right: 15px; width: 220px; max-height: 400px; overflow-y: auto; z-index: 60; display: flex; flex-direction: column; gap: 6px; pointer-events: auto; }
+        .player-profile { display: flex; align-items: center; background: rgba(15, 15, 20, 0.7); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 6px 10px; color: white; font-size: 13px; font-weight: bold; text-shadow: 1px 1px 2px #000; transition: background 0.2s; }
+        .player-profile:hover { background: rgba(30, 30, 40, 0.8); }
+        .player-profile img { width: 32px; height: 32px; border-radius: 6px; margin-right: 12px; background-color: #F5CD2F; object-fit: contain; }
+
+        /* CHAT UI */
+        #chat-container { position: absolute; top: 65px; left: 15px; width: 320px; height: 200px; display: flex; flex-direction: column; z-index: 150; pointer-events: none; }
+        #chat-messages { flex-grow: 1; overflow-y: auto; color: white; font-weight: bold; text-shadow: 1px 1px 2px #000; font-size: 14px; display: flex; flex-direction: column; gap: 2px; margin-bottom: 5px; pointer-events: auto; }
+        .chat-msg { word-wrap: break-word; background: rgba(0,0,0,0.3); padding: 4px 8px; border-radius: 4px; }
+        #chat-input-wrapper { opacity: 0.5; transition: 0.2s; pointer-events: auto; }
+        #chat-input-wrapper:focus-within, #chat-input-wrapper:hover { opacity: 1; }
+        #chat-input { width: 100%; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 10px; border-radius: 6px; box-sizing: border-box; outline: none; }
+
+        /* MENU UI */
+        #in-game-menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 700px; max-width: 90%; height: 500px; background: rgba(15, 15, 20, 0.9); backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; z-index: 200; display: none; flex-direction: column; color: white; pointer-events: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        .menu-nav { display: flex; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .nav-btn { flex: 1; padding: 15px; background: none; border: none; color: #888; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .nav-btn.active { color: white; border-bottom: 2px solid white; background: rgba(255,255,255,0.05); }
+        .menu-body { padding: 20px; overflow-y: auto; flex-grow: 1; display: none; }
+        .menu-row { display: flex; justify-content: space-between; align-items: center; padding: 15px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .menu-action { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .menu-action:hover { background: rgba(255,255,255,0.2); }
+        .btn-red { background: #E74C3C; border-color: #C0392B; }
+        .btn-red:hover { background: #C0392B; }
+    </style>
+</head>
+<body>
+
+    <div id="top-bar">
+        <div class="menu-icon" id="open-menu-btn" title="Menu">Rbx</div>
+        <div id="status">Status: Connecting...</div>
+    </div>
+
+    <div id="player-list"></div>
+
+    <div id="chat-container">
+        <div id="chat-messages"></div>
+        <div id="chat-input-wrapper">
+            <input type="text" id="chat-input" placeholder="Press '/' or tap here to chat" autocomplete="off">
+        </div>
+    </div>
+
+    <div id="in-game-menu">
+        <div class="menu-nav">
+            <button class="nav-btn active" onclick="openTab('Settings')">Settings</button>
+            <button class="nav-btn" onclick="openTab('Emotes')">Emotes</button>
+            <button class="nav-btn" onclick="openTab('Help')">Help</button>
+        </div>
+        
+        <div class="menu-body" id="tab-Settings" style="display: block;">
+            <div class="menu-row">
+                <span>Shift Lock Switch</span>
+                <button class="menu-action" id="menu-shift-lock">Off</button>
+            </div>
+            <div class="menu-row">
+                <span>Full Screen</span>
+                <button class="menu-action" id="menu-fullscreen">Toggle</button>
+            </div>
+            <div class="menu-row" style="margin-top: 20px;">
+                <button class="menu-action btn-red" id="btn-respawn">Respawn Character</button>
+                <button class="menu-action btn-red" id="btn-leave">Leave Game</button>
+            </div>
+        </div>
+
+        <div class="menu-body" id="tab-Emotes">
+            <div class="menu-row">
+                <span>Play Custom Emote</span>
+                <button class="menu-action" onclick="myCurrentEmote='custom'; document.getElementById('in-game-menu').style.display='none'; document.body.requestPointerLock();">Play</button>
+            </div>
+        </div>
+
+        <div class="menu-body" id="tab-Help">
+            <strong>Controls:</strong> WASD to move. Space to jump. Shift to shift-lock. Scroll to zoom in/out.<br><br>
+            <strong>Emotes:</strong> type <code>/e custom</code> in chat!
+        </div>
+    </div>
+
+    <div id="crosshair"></div>
+
+    <div class="mobile-controls">
+        <div class="joystick-zone" id="joyZone">
+            <div class="joystick-knob" id="joyKnob"></div>
+        </div>
+        <div class="button-stack">
+            <div class="mobile-btn" id="mbShift">SHIFT</div>
+            <div class="mobile-btn" id="mbJump">JUMP</div>
+        </div>
+    </div>
+
+    <script>
+        // =========================================================================
+        // 1. FACE STICKER
+        // =========================================================================
+        const base64FaceString = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAQAElEQVR4AezdB7wsQVYW8JFFwXVRRJFFUFxQEDOgoq6RVVgQYXUBEVwVxbAgCiIqgiwogrjmFRUDigoirIKASBBERAWz5Jxzzjmd/7xX99X09Nw7d6Zn7kz3d391blVXd9d0fV311alToV9ilb8gEAQWi0AIYLGvPhkPAqtVCCClIAgsGIEQwIJffrK+bATkPgQAhUgQWCgCIYCFvvhkOwhAIAQAhUgQWCgCIYCFvvhke9kItNyHABoS8YPAAhEIASzwpSfLQaAhEAJoSMQPAgtEIASwwJeeLC8bgT73IYAejYSDwMIQCAEs7IUnu0GgRyAE0KORcBBYGAIhgIW98GR32QgMcx8CGCKS4yCwIARCAAt62clqEBgiEAIYIpLjILAgBEIAC3rZyeqyERjLfQhgDJXEBYGFIBACWMiLTjaDwBgCIYAxVBIXBBaCQAhgIS862Vw2ArtyHwLYhUzig8ACEAgBLOAlJ4tBYBcCIYBdyCQ+CCwAgRDAAl5ysrhsBG7LfQjgNnRyLgjMHIEQwMxfcLIXBG5DIARwGzo5FwRmjkAIYOYvONlbNgJ35T4EcBdCOR8EZoxACGDGLzdZCwJ3IRACuAuhnA8CM0YgBDDjl5usLRuBfXIfAtgHpVwTBGaKQAhgpi822QoC+yAQAtgHpVwTBGaKQAhgpi822Vo2AvvmPgSwL1L3v+4n1i0vV/KMklcveYWSuCBwUQiEAKZ/HSr+q1ayb1byliXPLXlWCSIoLy4IXA4CIYDp38VLV5LPLHlRyfuXvLDkXUt+U0lcELgoBEIA07+OH6kkv7Pkh0qae8kK/OSSuCBwcgTu8wMhgPugtd+1P1qXfXcJv7y1+0n1PwRQIMRdFgIhgOnfx49Vkj9Ywi9v7WgASGB9kH9B4FIQCAFM/yZU/CEBPKV+hnGwvLggcDkIhACmfxdU/++tZPnlrZ3Kzzi4Psi/IHAqBO6bbgjgvojdfT0j4NAG8FJ121NL4oLARSEQApj+degCfE8l22sAdbiKERAKkYtCIARwmtfBBvADg6RpATEEDkAZHCqPNKWnVXyTdJ0KjFM5gJ8q7aWniwR6DIwE/JSK+AklcdsIwOVlKvqtS96h5O1Lnl/y7BLnyou7DYFDzoUADkHt7nt0A0wE6rsBsKYF3H33cq/QTXpeZf+dSt6xhP+c8uNOhIBCeaKkF50sAmAHYBBsQMDaaEBas4bIpg8zeFk09fJ16uklr1jCLy/uFAgolKdId+lpKsxGAn64A0IXQAvXRSU4QIDdpMfMaXMo+JETIBACOAGoj5NEAFq0x4crBMCwFQ2gIbLtw4v0Z+AWEugRGQkfGhUCOBS52++jAZgM1Ldm1H8EcPudyz4LN1pAjwLCNHrC7+MTngCBEMAEII4koSAbBeiNgFoyQ1wpyCOAdVFsJz1uyigC6C5JcCoEgDtVWklnEwEEgAhaLKxTkBsau3249d2AhluIczdmB58B7sE358adCKj4WrK+CwDrEMBOyNYn4DYcPqU5mT+xviD/thE4JkahPOb+3DuOgILMCNgTgIKcLsA4Xn0sDWDYBTB/IhpAj9JE4RDAREAOkkEANIBelY0RcADSjsMxAojmtAOsY6NDAMciOH4/AhjTAKiyacnGMRMLt10EENwgNLGEACYGtEtuqAHoAhgGTEHuQBoJDm0Aymg0gBGgRB0rwD02jdy/jYCWbFiQdQHYALavTkyPAA2g7zohTATA769LeAIEQgATgLgjCRNahsasFOQdYHXRCGAMt+6SBKdCIAQwFZKb6dAAdAH6UQBYI4DNK3PUIwC3oebUcIsG0CM1URi4EyWVZDoEFGQE0KuybADpAnQg7QjCrSdO6wCC2whYU0SFAKZAcTsNBDA2ChAj4DZWfQzcvr8ieuJEAFZRRgMoYKZ2IYCpEX2UnoJsMVBfkBkBMwz4CJ/b/o91AWB32z05dyACIYADgdvjtmFB1pJFlb0buF1GwGgAd2N37ytCAPeGbK8baAC7RgH2SmChF8ENAfSakzIa4+mgQEx1CNyp0ko6mwgMbQDOKshpySCxWxDA2DBgcNuN2cFnQgAHQ3frja0lU5j7CxFA+rM9ItvhYddJxYfb9pWJORqBEMDREO5MQCv2fYOz7AAxBA5AGRwiTdi1aGUUASCCFhd/IgSAO1FSSWYEAWPaCnQ7hQDsfR/cGyKbPs0JaQ7nARgG3LxywUdTZj0FcUo0t9NSmKm07Qy8FWZ+i4u/icBw+BRpGj2JBrCJ0yRHKYiTwLgzEZW/V2cV4qizO+Fa0QCGmCmj7Caw231nzhyEAHAPujE37YUA9b9XZxXi7G5zO3Qw60lTGUWat9+VswchANyDbsxNeyFAnVWg28XwznTghsa4D6/MAxjHZjV1tAI5dZpJ7wkCjIBU2hajP4sAgntDZNPf1QWgAdCeNq/O0dEIpCAeDeGtCezSAIL7bthoAOkC7MZn0jMpiJPCuZWYlW1DDSDDgFswbUQMCUDLHw1gA6LpDkIA02E5lpLKP2zNDAMq1GPXLz1OFwBp9jYA3aaXXjow8n8KCQGcAtUnaWrNhqMAac2e4DMW0m3qMUMAmT05htQEcSGACUC8JQlGQCTQLtHyZxiwoTHuw2uoNWUewDhWR8eGAI6G8NYEhgSgNcsowG7IdAEQQN8FcDWtiR+ZGIEQwMSADpKjzirQLRreIYCGxrg/tJu4avEEAIRTiAJ5inST5mo9rdWmIH1/Ft4IQFcgGO1GoMfMVXDTDRCOTIgAYCdMLkkNEBi2ZvA2CsAfXJrDDoEhASDMaAEdQFMFUxCnQnI8naEG0Aoyf/yOxEIAcfJ7QQDBrUdkgnAIYAIQb0liaASEd0YBbgHs8akhccLNXAD+40uW450ypwH0lOiuVmMEkJmAd2NuHwUk0K7U8psLkPLaEJnID6ATAbkjmeEoQBsGVKB33JLoQkAXoB8KhFc0pwJmahcCmBrRzfTGNACjAMF9E6fh0RgBxAYwRGmC4xTECUC8JQkz2oYWbX3ZDGndAlqdQgA9bjQABLC48lpYnNQF0JPCu068V2VFwJw6KxwZRwAB9Lg1AuCP35HYgxBQGA+6MTftjUA/E9BNCrHWjO84so1ACGAbk5PEhABOAutGoizaQxKgAQT7DZg2DkIAG3Cc7iCF8HTYtpQRgDXu7VjLzxD4ki0i/hYCCHNoA0CasNu6eK4R58hXCOD0KKv8pP2SQhwCaGiM+4ZP+3kAyinMDKOO35HYgxAA7EE35qa9EaDOknZDI4AU5obItg+voREwGsA2TkfHhACOhvDOBKiypF2IABTmYN8Q2fYRwBCzGE63cTo6JoXwaAjvTIAqq0/bX6gwB/sekc0wAhhqADBDnptXzvToXNlKITw90mNGQJOB0gXYjX0IYDc2k54JAUwK52hiYwQQg9YoVDeRIYAbKE4bCAGcFl+pGwFAAsKEGosAMgwIjXFBAGM2gJTXcbwOjg2gB0O3940qPztAu6ERQLoADZFtn81ksTaAbThOFxMCOB22LWWtGWnHfKMAIQBIjAvSRALtrHJKa+K3uPgTIBBAJwDxjiSosqRdRgOwGpDf4uJvIqDyDzFDmsFsE6ejj0IAR0N4ZwLUfwW6v9DGoNEAekQ2wzSmIQEYBkx53cTp6KMAejSEdyZAnWUIbBdqxWwLFiNgQ2TbRwCLtAFsQ3HamBDAafGVOgIgwgQB2N8uGgA0xmWMANIFGMfqqNgQwFHw7XWz1l83oF2MABi0ogE0RLZ9BDDWBYDd9tWJORiBEMDB0O19o4JM2g0KcQigoTHuI4B0AcaxmTQ2BDApnKOJKcxDAqDOBvtRuNaRMOsJQCQjIPIUnqU8RKZSCE+POvWf9L+UYcAeje0wm0k/cqKcspvwt69OzMEIBNCDodv7RoWZtBu0Yk+tgxgBC4QdDmHSAtpp5dQCKn6Liz8BAgF0AhDvSOLH6rwCXd7aIQDzAGgB64j820JA5U8XYAuW6SNCANNjOpZir846bwRAiyYc2UbA9xR6AkCas7YBbENwnpgQwHlwVph7Q6BfTTcACrsFZv1ZGlPKa4/IBOEAOgGIeySh8lNr+0u1aLED9IhshmG2GbNaIYFhXI6PQOAljrg3t+6PgC5Abwh0p8IcAoDEuAwJoHUDxq9O7EEIhAAOgu3eNzEC2uq6vzGGwB6N7TACGHYDaE2IYPvqK455yEcPAZwHfRrAkACMayvQ53mC6/sVmJlG3Z5cxUeaDKgtLv6RCIQAjgRwz9vHNAAEoBuwZxKLuwxmpM94DKc9GhOEQwATgLhHElqz3gagNVOYowHsBk8XgPRXIMyU2R6RI8MB80gA97xdX3Y4ChACuB08lZ+0q5AmwpyV4bRl7qH8EMB5kB8jAIU5+O/GX+UfkmYw243XQWdSAA+C7d436QIMjYDU2bRmu6FEAKS/AmYpsz0iR4YD5pEA7nk7Y9aQAFi0Feg9k1jcZSo/aRlvXYCU2YbIBH7AnADEPZIYIwCjAFTaPW5f5CUqP+kzD6/ZlNk+Yw8VDpjnQV5fth/T9qshACjsFt0mxNlfYQFVuk09IkeGQwBHArjn7WNGwHQBbgdP5SftKl0AIyeZCNQQmcAPAUwA4h5JUGVpAf2l+v9pzXpENsNjmKULsInR0UchgKMh3CsB6uzQCKgwhwB2w4cASLuCBgCzWZTZlqmH9gPmed4AVbYnAIWZOksLOM8TXN+vqPykf/IQQI/GBOEQwAQg7pHEmAaAABToPW5f5CUq/1i3KWV2wuIQMCcE85akhhqASzMKAIXdggBIu4LWhDBTZhsiE/gBcwIQ90hCSzYcBjQKEIv2bvBUftJfMQsC6DP00OEQwHnegE0ukUD/a/r/MQL2iGyG4aXr1Mf6oEow6xE5MjwlAVDRyJGPNNvbFeg+c1r/FOYekc0wjYm0WGVLtwluLS7+kQhMSQDUM2qtQk28qDFxzu96oUc+/lXdzg4wVGm1aFeViTM+LKyGpKmMKTtnfIyT/JQ8qBvyMxSaoXPqCVFPyMkeZKqEf1Yl9FtL/kDJHy15t5L3K/mbJX+j5IUl71nyR0per+SnlSzJKczfUxn2oZDy1q4R5vog/zYQQACkRaoEKotK0eKuzq8Hlo9fW7768NHlf2zJx5f8+xLhf1X++5b8iZI3LfmFJa9QchKHiY5J+GfXzc8tkZm/V/57lLxzyZ8seduS31vye0requStS96m5B1L3rvkn5T85ZJfUwKU8mbtFGYE0GcSAZjf3scl/AgBeJFHR4/+I4Bjy+yjlB7uvxb+Lern1YnfVv6zSn5zCZ/89go/r+TtS9695O+UfECJRvSZ5U9aXo4FUyY86PPrwd645HVKXrPk1UteuYRW8DPKJy9fPsJw7nUr/LtK3q6EtiBj187slZVbncJsW7ChBjDpC731Ca7rJLxoTf1TqzzHltk+vYcIK+fqiLrRN3wtrDxo8V+tHu61SmjVb1I+SoOcrAAAEABJREFUzfnPl/9mJepSece7Y8Gk7qu8jDOHPM3L1k3PKfl9Jb+gpIFQwdm5sZEANgCt2uwyO0GGEABpSSkbsDq2zLb0Hsq3MOzz6se/saRvDOrwVqeOvVFd8U4lugYa1Qoe544FE1u1J5CZ766DbynhO67g2in84mX8Kyqmt+4iAarPG1a8l1zeLB0MGAJ7XBh7yCwzfGSmVP6hBnDVBPAYD3n6sAp/SMknlnxSyaeU8D+9/K8pUU7KG3WvXbE07jco/+j6ciwBfGA9hEr9zeV/QQljxgeV/x9L+kruZX5yxVH5X1D+p5V8R0lz2Iyx4+gMtQQv0PfiEWP/aFTaEECPyJOwMkOexKxWcyAADcB/r0y9S8nvKNGqv3751HyGv4+psPpU3goRfF0FkILyU8G1++X1371PL/+oOnMsAbyoHuB3l+inyMgfrvBfKnmfkq8vkdny1i/u51TgaSUvLqHyf0T5Mkol+owKf3CJVrK8WTqFmRGwYSKTMQJCYVw0IGwm7ayCrvwgzRZ3rb5yrjyY6ERU7perzPytEsZyFbuCqy+uf+9VIu4Ly1dXyls9pf6xD+g+H1WHj7q5HuK7Sr6o5LNLvqzk20q+veRLSj6uRLi8tWP4YCj0UrGaIUGjBJhPv+Z/1lV95ajDWTkveagBhAB2v2J4kf6KOWgAfX5aWDeY9Z8WjORUcOc+v/5pMP9f+f+6RINZ3tr9/PpPCziqDh91cz0Ah80aMzkmiEEfh6HDMTHu/6sqoA9D7WUL0O/RbfjcikcM5c3WwYlK15NcCGD364aTVrJdQQO4WgJomdjhs+prDFX+domGlW2A7azVJ4SgHLkGSfzcCvySkoPdFAQw9uOY+//WCa26h6/g2nngN6+QF1neygsekof4OYoXB5c+b3AgfVzCTxAY4kX9P1WZffKr5w2p9BrGX1E/25cF3WJadEWvlB1aNTvaN4h4LBpSRPD48P7eKcHUon9kPZKuQXlr99Pr/7NLqC9HPXilcW0O0cGkf+6jX2Cf2AzDMOuzpbzOrdyoCybT0QZbXlVyIwJsAC2OBmSmoJGDr6pIGjRj4pdW+GAH0INvvuNGKpzRgM+q6zBYeWvjxTMqQAv4meUvyWnNhkZALRpZEg73yeuQANw7J7y0/qYFG9Lr66KuMQKQ3ybq02fWwT8u+bslZggywrO71eFhrv/Rw1LYfZcHNtRHbfmc7jITGv5gHf/iEi1geYtwujuMgHBpGcb6pB3H30QAASDOPvbqCKB/+EH419WxmX3qhBa+DlcaCXWG4c9xL0YM/mtFmBaMAFzTl6c6dT93SgJoT/JRFfjPJc35TUaP318Rr1GyFKcge7l9flV+swH7uISfIIAAFPonMav1kPJT+ogrDasD1gJYB9CyIL/qy/+uCOHythxtWmNChLcuuE+Eynif6w+51tDFJ9SNJv+Ut3ZY3HRGC4FUgnXkzP95YWMaQD+bcuYQ3Dt7KgHi7G9UXnpjWX/umsLWwhgCb3VQZWbxtxrQqNhZ8tJ+/NQ/9qn1AwyCvRHMsKCVgkigTs/eKcyGAfuMKswhgB6RzbBKMSQAGtO1dx3NidHvt/6l5Zim8y/qQOsvXMHTu3MRQLMF/IdBliwkMipgZdTg1OwOxwqzlozMLrMTZUjl7xsNydIer6YL4IEH4vnfsuKsiG39fvnU6mv9+7kzddlp3bkIQC5MYviXFfjaEpWhvJXWzzxobOh4zkIDUJh7o43CcO2t2SnfmYphSnD/G9eMmXdtybxZf5bGt3xR/U2cU0d0FVv8yf1zEoDCb2KQrkD/Uk2A0BeyVuDkGX7AH1CYh0ZAhZk84GNd9E8jTbj1Dwmva9UAzPe3XsZa/5Yn6r5JcwhAHWnxZ/HPSQAyZA3AP6qAiQxNC6jDlZlQRgVoBI7nKJg9RsD7vVkEoIL0d10rARjqM+Zv0Zy5/y1PVtP+8zr4ppK+TtTh6d25CcALNTPQMuK+r/MqldXfWcIgONc+sZeLABABHPhUQgW6sh43ggCcrlYDGOSHwc+OPpa+t1PKw3+rA0N/ykMFz+vOTQByZ20AY4cVhP3L/UV18s+VvFLJQzxX/ezJnSmeyM9GqfZDfNf6xTbfu4JxAwTmQgDmu1jr/0srfz3hGx3T+vffjaxLzuceoqJpCW1w8E8rmxY4lLd21H8qkg1FTZJYR87sHzXv/StPNlA1pfOfVdhsrvLiRhBoBNAbTg2dXpOWaH8/Ni7i2Vs21QHz+g37tbiz+w9BADLphRoS1Pp9q4jH8jLl22DERgcWDtXhrJz+rAUeukFfXTmjEQwNgxUd9xgBjQUtsQ2XidZQ9K2ouEsVXTyb5djlt1f95Yvarw7I34M9/0MSgEUMLJ8WPrT+jxeNMVlKzZO+lhf9YC9w5j/cawAqClWZf/HZfvyAyrDdfKj+j6PWHtXfBh+20VtHPNS/hyKAll/DguwBvRqEBIyVmixh77N2bfzlIWACmS6SRsJSWEPI/6dgEF/eRTt7X2jIaADtQbX8tD9bf1nv3+IfzH9oApBxX0T5BxUwQUjXoIJrpytgqnA/YWJ9Iv8Wg4AhMpvImjhjCblt6NmO9J8vFQQNmCG/d6gHVPl7LVZ31yo+lv9+Lkxd+jDuEghAv5gtwBLHHhTAIQBLh/WlHgah/OpDIqBB0D1URqj+RLdA/EM+122/zUZhia/9L9vmnq6ntWjs7PHHGCzuweUSCAAIdhC2HbLFED0JvGKdtGrKF4gqGBcELhoBDdVr1hP6Wpadfiq4dghMN/ev1pHJcOVdhrsUAoCGrY18L5BdAGDiiI1DfFOQOnVJz+vZIkGgIUD1t6uvuR2MfsignbOTz1+rA3P9aTAVvAx3SRWKesfgY7sjQ2UNIWO+v7oO9KnMFNQ1qMO4IHBRCKj0PnxL9dcNaA/H0s9uYXs8RsAWfxH+JREAQLT8LL1WDbKWiiNPrX9WDFKtfBAhJFCAxF0MArbm9vFOW3v3lV/X1lD3h9eTauDKuyx3aQQAHUCZLfehdWBkoLy1sxGEoUFfEzY82KtY6wvyLwicGQFqv69dK5N/qH77pUqaY/TTkBnmvhijX3u45l8iAbDwfmc9oPny5kmbMFSHa+d5DQVhWyqXF7A+kX9B4MwIKIuvXL/pq1b9Slbl14QlFd9Ubx/4qMsu08nEZT7ZaoU1/349nDkCugYVXDvP7NuCugNIYB2Zf0HgjAgog7a1N0fhLep3TWEvb+2MYpnmq+za5Wcdean/ZORSn81zfWX9owUwDPbWU90BwFs4ZH+1uiwuCJwNAZXfR3B9m88mH+2HtfyMfYb7VH7aQDt3kf6lEwDQqFBUKavnTAoRR7CuPQT+TB0YKiwvLgicHAFqv2XrFqz1e1l+X/2yOf7vW75hv76sVtRlumsgAC2/KaEfUBD+m5J+2yQrBk0UeueKt/AihsECIu4kCLA3aWj+VKXO2t8vWddF9cEOc/x9rkuZrcsu310DAUARm/rEmOnCVCyqlnjyU+ufFVc2XPgtFTZkWF5cEJgMAcPOtq0zF+WPVaoqP0Ko4PoDtyo9W9XHi7gmuRYCgCkS+F8VQAK+NNTvsW+yEJsA1czXVnQP6tK4IHA0AhoU2iUt0+hTv6mHMml1ospPOz36x86dwDURAGzMpFL5qVo0AXMGxBOM7DNLjDPIgGYgzrlIELgvAsqOVX3PqhtbmRJXh2unAdLXZ/B78TrmCv9dGwGAmGX1P1XgvUosHsLCFVw7+bG3oM0XqWu+PtS/tPVF+RcE9kBAy2+42d6NNID+FpXfkt53qUgr/PoyWFHX41SY63naJ0+q5bduQHfAIoveJmDP+J9Xl5qd9Z7l208gJFBAxO2NgD6+7qRJPhoUZardbAu3f1sHzjP8Gfevw+t010oA0EYCRgcMD2Jp867FE/nyoRH7CdAUzNUOCUAmchcCtu9+t7rI7D7hvvLbw9EEnxfWefYomkAFr9epKNf79KsVm4CdhS0j/uuVEcstxVVw7YzT2lnoz9aRSRtPKz8uCIwhYBHPb6wT1HrDfBqQOrxxVqiq/IajfcnnppzdXHGFgWsngAY5ZraAyHbbrLLGZds5ld4wISuuF/uqdWIu+a6sxE2AgP37nlvpmFRmrUm/g29Frz6n/qn8rP2IoA7n4eZUEUwQelG9lr9dYly2twtU1Aq7s+aaPmxM1yiB+MhyETCkp3vIXvTeBYO9B435V3DtNCT/v0JU/n9YvoamvPm4ORFAeyuWYKroJmUgAaMG7Rxmt4iI8fBNK9JMwr6PV1FxC0BAuVcWfkPl1ToTjQLDcR2unTLjs11Ufd1HW3g7Xp+c0z9AzCk/LS/mCjDksAv49HKbmskQqMLbYYjhELPrEphI1O6NP38EVHYzR32o1teojPf3ubYE/cMqwsSfTyl/p6W/zl21mysBGJf9wnoz+mxvV759Bo0aVHDtrBmwqMM6AoVA/8+cgfXJ/JstAoieMVg3kdqv7y+uz7BWnyFQl8CKvqu39PeZG4bnSgDyqdW3o5CJGjZqRAb9UCFtQBfg19fFxnT/YvnsBMMCUdFxM0DgdSsPLyh5jxIbzPoCVQVvnD37P7iOlBXj/Lak05BU1HzdnAmgvTV2AGqcUQLTNhkIe21Al+CX1cXGfXUb9Ad/ZR0vAZvK5uwdI98fr1zqy/tSj3dryK+ibpxWny3ApDK2o2+/OTPzwJIKud1ZDRPq9/+7eq/D/dl1AV6/4hWUP12+SUS2eUYQdRh3RQgo19R7H+hA6H+hnt3eEWb4VfDGqeg+0Gn7OV/sMbv05uRdgTmcB9Qc8rFvHvTnPqIufveSDyqx2YihngreONZhk4csOLLNswVGphP3w0M3FydwUQgoz3brMXef7Udf/23rCU0IK+/GUe19h0JZ0N+n+jMW31ywlADAlpLXPp+0gb9SESYHmdKp/8dmUFE3DhH4LJndiBCBnYhZi6MR3EB0MQHl2IQvO/Q+v57KmL2K7ctSdXjjvGNz+an8NEHvlaFvFrP6bnJ5jwDg7nH5rC618/AnVo7MDny/8q0rYBswBlyHK0ZCrb7WX2uCCBgLffLJKMKSsYPPJUh7Rwx6rPrmgKj4iMD7cd5zeqcquWnj1H3Ebq/J76qTzpW3TAekZeZ8tfLije9+eQHgyy0KxftUGBGUd+NgpOVnD7AbzAfWGSMGrMoIog7jHgABJGyLLtN3bcFt5R4tzWYwQy2NvcecEOP6Zot6x4zDysBBjz6XmxTuueTl0HwoBLYgN1fAnAAFykxB9oE+TYVK/9LEEfPFdSFcZw7BsI/Z35fwtAjYhfeNKklkrY+vUhu+faWKQwrl3TjDvt4pQyAD8KfVmW8s0RUoLy4EsFkGvqYOzRtgEVbAqP22Jq/oG0et1LdU6GgNRgxYmQ0japGC6Q1Ukwao9b4MZajWSI0hvderX2Dt904qeONU/BfXkSnhSEKYppeKX6D0LoW1R+NJ+CsqqPKbDTxVOc0AAAfWSURBVEZlNGxoZqEFR3Xqxtk1xgdLjTObYEINRQSmGjMi3lyYwEEIUOep9Sq+qbswZrhDvi87SJH9Rh//4ypea297br6VfBUVN4ZACGAMlSdxCpTJIbaC1oekHRhB+Oa6hFGpvBtnTYHvw1k2ahOSt6ozzywRjwxiLygw7nDKo9mZz6jrTNjRvdLiq8gWcfkIjGvq9Np5B+btI+dPqBiaG6LQ8lsWXlHTuzml2IM5p3xNnRfTQu08ROV/m0qcdqBlMXZsbgE7QkWvna8WmVCEMKieVFBagQJtIoplyK4Zqq3rmxf2DwaI0RAeO4oulNaefQV2+u/Wa/StPazN3TCKo+JbqaePb88Hs/lmtV7/1OUhBLAfwgqd1saSUPMGdA0sJzbkpOVpGoFrpAhXBVuhtk35Cyryw0vMMWdkpMIyZjFaMS6qCHV6EU5e4SPfZl/am4Fab1juYwsBtpc3Kd+OPD0+3oE+vHfAmGfOvtl9fJvEIgT4u65uj9sHAS9in+tyzSMEFC59TZ9+phWo0Aqv3WNNLPHxkkdXPvoPX629Vp+Vmm2A8UpL5V5aAjX3VR5dvoj/tKA3rpyq6JbcGlal3iNFKzS19ubqw64uWzu4m7lnQZd5G+ZlGPqjAZjOO9TC1jfl390I9CDffXWuGCKACBTMT6oT+v5GBBgCP7SOh/sTVtTKSkNaAYu2As9OYAtzfVzqrrA1CKaymoB07e9HXpGe7zSYRGVBlnzSiHSL7Ln/GgXM00vszlPehmOM1RVgB7DNu+4UIx87jL6/Fn/jhlMfzC39ay9gl/I+aAUKq4+VKOBadoYoE4a0VAxSyGL4vOYVsHK/YZ1gQDSaYHoyImBIJFo7/WCkwAhmCJJWUbdchNPVMRNPRTZHQtfIrDxbssu/vCBGeTMvn3r/2vXk7hmWPxOzfGxDpWfFRxSMsDbitGjH3Az9/7o9bgoEhi9gijSXnoa55uwEH1JAqAAEIZif/tEV55xx6gpuOH1jlft1KtbedCqLRUuIRAvI3qC7QV02+YX2YHML30PUyjKg6UpQsanRhtDMYNSyIgz96dvet3OuoaVQwd0rDf10oxj65AhIn90CKWq8lt2zICmGOBVdhUdcKi8iQAju0QWSdmXvxlHtGVLtu6f/z9Bqqi4bizQs2PqMutpajfLipkbAS586zaT3BAEFXFcAGTD+GUXQMhpFYLiyEIUtwUxEU1Of3PkkxFioxXxORalsyMBwl68i6T9btYgkVD4VTh/5zetatgX3IAkz555dcQyS1G6boKiUiMO+eCbUOPcGdY1r3eNeaUgL2SAk2onnNwNSZWWBZ88wPm8RDk1Fmlr3SmrLaeFVeNqS6bj2abASjz0AsVHzYYMQ9Ou3EkjEtAiEAKbF867UFH6qrJmDrQVVoX3XACGYd4AMdBcQgq4FEhlL17vTMtvwwg43z6uLaAk2PdHXpnFY42CBjIrK6PhRdY2Wls2CJf2/1LFui2dyzvJYhjmV0r3SYJ9Q4bXspkAjEt0W/fu6faez5NbEKdZ5+UZ0fpO1H4kgKgRjjoUPayKFnYldwok5PoNCNMd8XWqeVGaGK5VDBWfM+sh6WP1dRjHqvL0ItKi0BhtUMHYhAuI+Q2HSkFbduvIOiWE1KjzRLx8TKvhtMnaPOGkSv+G3iN/2DJ7FM3k2oo9uqO6z6wIVmzpvjB5JMXBS7ZGMERMWfPcSadUtcedEoL3Ic/5mfusJAipM30p+VZ3y0UmtNrUeKVDJ2842JsjoF1vGbCIScqhbHsRZSovAaC7IirFOa667YCKUFp6mQ5P41HpCoyXmS+yj3dTlcedAIARwDpTv9xv6voxeFiHpJzOCUdENLbYRBhoCo5tZiVR/fXPkwCZA1TdUpmIiEyMQyEIFtNiJOs5QiXy0ujQRv2fJrGvYJWgen16PrY9ujzxair65Ss6WoStA9NkZKnU7jNEjgo+p++y76DctwFHpkVxFx10aAiGAS3sj489D/dfaIwUV9H/UZZ9cot9OW9BHNyPOUKJ+tWFFhj1rEYwqsBO8Wl1voo2hR1NvqfbeP2s/W4J5B64xmvBada0hPV0SfX4z7pANG4MJT7QQ9gL2A0RB3deHRy4IrG6fl5trbhSAueYt+QoCQeAOBEIAdwCU00FgzgiEAOb8dpO3IHAHAiGAOwDK6SAwZwRCAHN+u8lbELgDgRDAHQDldBCYMwIhgDm/3eQtCNyBQAjgDoByetkIzD33IYC5v+HkLwjcgkAI4BZwcioIzB2BEMDc33DyFwRuQSAEcAs4ObVsBJaQ+xDAEt5y8hgEdiAQAtgBTKKDwBIQCAEs4S0nj0FgBwIhgB3AJHrZCCwl9yGApbzp5DMIjCAQAhgBJVFBYCkIhACW8qaTzyAwgkAIYASURC0bgSXlPgSwpLedvAaBAQIhgAEgOQwCS0IgBLCkt528BoEBAiGAASA5XDYCS8t9CGBpbzz5DQIdAiGADowEg8DSEAgBLO2NJ79BoEMgBNCBkeCyEVhi7kMAS3zryXMQeIxACOAxEPGCwBIRCAEs8a0nz0HgMQIhgMdAxFs2AkvNfQhgqW8++Q4ChUAIoECICwJLRSAEsNQ3n3wHgUIgBFAgxC0bgSXnPgSw5LefvC8egRDA4otAAFgyAiGAJb/95H3xCIQAFl8Elg3A0nP/4wAAAP//gQWy+gAAAAZJREFUAwDTJ/ZMgg1m/AAAAABJRU5ErkJggg==";
+
+        // --- MULTIPLAYER SETUP ---
+        const socket = io('http://localhost:3000'); 
+        const statusEl = document.getElementById('status');
+        let lastEmitTime = 0; 
+        
+        socket.on('connect', () => { statusEl.innerText = "Status: Online"; });
+        socket.on('disconnect', () => { statusEl.innerText = "Status: Offline"; });
+
+        // --- UI REFRESH (PLAYER LIST) ---
+        const myName = "Baboom_" + Math.floor(Math.random() * 999);
+        const peers = {};
+
+        function updatePlayerList() {
+            const list = document.getElementById('player-list');
+            list.innerHTML = `<div class="player-profile"><img src="${base64FaceString}" alt="Face"><span>${myName} (You)</span></div>`;
+            for (const id in peers) {
+                list.innerHTML += `<div class="player-profile"><img src="${base64FaceString}" alt="Face"><span>${peers[id].name}</span></div>`;
+            }
+        }
+        updatePlayerList();
+
+        // --- CHAT BUBBLE GENERATOR ---
+        function showChatBubble(targetGroup, text) {
+            if (targetGroup.chatBubble) {
+                targetGroup.remove(targetGroup.chatBubble);
+                clearTimeout(targetGroup.chatBubbleTimer);
+            }
+            const bCanvas = document.createElement('canvas');
+            bCanvas.width = 512; bCanvas.height = 256;
+            const bCtx = bCanvas.getContext('2d');
+            
+            bCtx.fillStyle = 'white';
+            bCtx.fillRect(10, 10, 492, 140);
+            bCtx.beginPath();
+            bCtx.moveTo(236, 150); bCtx.lineTo(276, 150); bCtx.lineTo(256, 190); bCtx.fill();
+            bCtx.font = 'bold 40px Arial'; bCtx.fillStyle = 'black'; bCtx.textAlign = 'center'; bCtx.textBaseline = 'middle';
+            bCtx.fillText(text, 256, 80, 470); 
+
+            const bTex = new THREE.CanvasTexture(bCanvas);
+            bTex.needsUpdate = true; 
+            const bMat = new THREE.SpriteMaterial({ map: bTex, depthTest: false, transparent: true });
+            const sprite = new THREE.Sprite(bMat);
+            sprite.scale.set(6, 3, 1);
+            sprite.position.y = 8; 
+            sprite.renderOrder = 999;
+            
+            targetGroup.add(sprite);
+            targetGroup.chatBubble = sprite;
+            
+            targetGroup.chatBubbleTimer = setTimeout(() => {
+                targetGroup.remove(sprite); targetGroup.chatBubble = null;
+            }, 5000);
+        }
+
+        // --- CHAT LOGIC ---
+        const chatInput = document.getElementById('chat-input');
+        const chatMessages = document.getElementById('chat-messages');
+        let myLastMessage = "";
+        let myLastMessageId = 0;
+        let myCurrentEmote = "";
+
+        function appendToChatBox(name, text) {
+            const el = document.createElement('div'); el.className = 'chat-msg';
+            el.innerHTML = `<strong>${name}:</strong> ${text}`;
+            chatMessages.appendChild(el);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === '/' && document.activeElement !== chatInput) {
+                e.preventDefault(); 
+                if (document.pointerLockElement) document.exitPointerLock(); 
+                chatInput.focus();
+            }
+            if (e.key === 'Enter' && document.activeElement === chatInput) {
+                const text = chatInput.value.trim();
+                if (text.length > 0) {
+                    if (text.startsWith('/e ')) {
+                        myCurrentEmote = text.split(' ')[1].toLowerCase(); 
+                    } else {
+                        myLastMessage = text;
+                        myLastMessageId = Date.now();
+                        appendToChatBox(myName, text);
+                        showChatBubble(player, text);
+                    }
+                }
+                chatInput.value = ''; chatInput.blur();
+                if (document.getElementById('in-game-menu').style.display !== 'flex') document.body.requestPointerLock();
+            }
+        });
+
+        socket.on('chatMessage', (data) => {
+            if (data.name === myName) return; 
+            appendToChatBox(data.name, data.text);
+            for (const id in peers) {
+                if (peers[id].name === data.name) {
+                    showChatBubble(peers[id].mesh, data.text);
+                    break;
+                }
+            }
+        });
+
+        // --- MENU LOGIC ---
+        const menuEl = document.getElementById('in-game-menu');
+        let menuOpen = false;
+
+        document.getElementById('open-menu-btn').addEventListener('click', () => {
+            menuOpen = !menuOpen;
+            menuEl.style.display = menuOpen ? 'flex' : 'none';
+            if (menuOpen) document.exitPointerLock(); else document.body.requestPointerLock();
+        });
+
+        function openTab(tabName) {
+            document.querySelectorAll('.menu-body').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-' + tabName).style.display = 'block';
+            event.target.classList.add('active');
+        }
+
+        document.getElementById('btn-leave').addEventListener('click', () => { window.location.reload(); });
+        document.getElementById('menu-fullscreen').addEventListener('click', () => {
+            if (!document.fullscreenElement) document.documentElement.requestFullscreen(); else document.exitFullscreen();
+        });
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xA3C1AD);
+        scene.fog = new THREE.Fog(0xA3C1AD, 40, 180);
+
+        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 0.7);
+        sunLight.position.set(50, 100, 50);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.set(1024, 1024); 
+        scene.add(sunLight);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#A3A2A5'; ctx.fillRect(0, 0, 128, 128);
+        ctx.fillStyle = '#929194'; ctx.beginPath(); ctx.arc(64, 64, 24, 0, Math.PI * 2); ctx.fill();
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(200, 200);
+
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(1000, 1000), new THREE.MeshStandardMaterial({ map: texture, roughness: 0.9 }));
+        plane.rotation.x = -Math.PI / 2;
+        plane.receiveShadow = true;
+        scene.add(plane);
+
+        const faceTexture = new THREE.TextureLoader().load(base64FaceString);
+        faceTexture.magFilter = THREE.NearestFilter; 
+
+        // MATERIALS
+        const skinMat = new THREE.MeshStandardMaterial({ color: 0xF5CD2F }); 
+        const hoodieMat = new THREE.MeshStandardMaterial({ color: 0xAD1414 }); 
+        const pantsMat = new THREE.MeshStandardMaterial({ color: 0x1B1B1B });
+
+        const localSkin = skinMat.clone();
+        const localHoodie = hoodieMat.clone();
+        const localPants = pantsMat.clone();
+        const localFace = new THREE.MeshBasicMaterial({ map: faceTexture, transparent: true });
+
+        function createNameTag(name) {
+            const nCanvas = document.createElement('canvas');
+            const nCtx = nCanvas.getContext('2d');
+            nCanvas.width = 512; nCanvas.height = 128;
+            nCtx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+            nCtx.beginPath(); nCtx.roundRect(64, 20, 384, 88, 30); nCtx.fill();
+            nCtx.font = 'bold 44px Arial'; nCtx.fillStyle = 'white'; nCtx.textAlign = 'center'; nCtx.fillText(name, 256, 82);
+            const spriteMat = new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(nCanvas) });
+            const sprite = new THREE.Sprite(spriteMat);
+            sprite.scale.set(5, 1.25, 1);
+            sprite.position.y = 7;
+            return sprite;
+        }
+
+        // --- LOCAL PLAYER ---
+        const player = new THREE.Group();
+        const upperBodyGroup = new THREE.Group(); upperBodyGroup.position.y = 2; player.add(upperBodyGroup);
+        const torso = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 1), localHoodie); torso.position.y = 1; torso.castShadow = true; upperBodyGroup.add(torso);
+        const head = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), localSkin); head.position.y = 2.6; head.castShadow = true;
+        const facePlane = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), localFace); facePlane.position.z = 0.605; head.add(facePlane); upperBodyGroup.add(head);
+        const armLGroup = new THREE.Group(); armLGroup.position.set(-1.5, 2, 0); const armL = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), localHoodie); armL.position.y = -1; armL.castShadow = true; armLGroup.add(armL); upperBodyGroup.add(armLGroup);
+        const armRGroup = new THREE.Group(); armRGroup.position.set(1.5, 2, 0); const armR = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), localHoodie); armR.position.y = -1; armR.castShadow = true; armRGroup.add(armR); upperBodyGroup.add(armRGroup);
+        const legLGroup = new THREE.Group(); legLGroup.position.set(-0.5, 2, 0); const legL = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), localPants); legL.position.y = -1; legL.castShadow = true; legLGroup.add(legL); player.add(legLGroup);
+        const legRGroup = new THREE.Group(); legRGroup.position.set(0.5, 2, 0); const legR = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), localPants); legR.position.y = -1; legR.castShadow = true; legRGroup.add(legR); player.add(legRGroup);
+        scene.add(player);
+
+        // --- REMOTE PEERS ---
+        function createRemoteBaboom(name) {
+            const pGroup = new THREE.Group();
+            const uGroup = new THREE.Group(); uGroup.position.y = 2; pGroup.add(uGroup);
+            const rTorso = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 1), hoodieMat); rTorso.position.y = 1; rTorso.castShadow = true; uGroup.add(rTorso);
+            const rHead = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), skinMat); rHead.position.y = 2.6; rHead.castShadow = true;
+            const rFacePlane = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), new THREE.MeshBasicMaterial({ map: faceTexture, transparent: true })); rFacePlane.position.z = 0.605; rHead.add(rFacePlane); uGroup.add(rHead);
+            const rArmLGroup = new THREE.Group(); rArmLGroup.position.set(-1.5, 2, 0); const rArmL = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), hoodieMat); rArmL.position.y = -1; rArmL.castShadow = true; rArmLGroup.add(rArmL); uGroup.add(rArmLGroup);
+            const rArmRGroup = new THREE.Group(); rArmRGroup.position.set(1.5, 2, 0); const rArmR = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), hoodieMat); rArmR.position.y = -1; rArmR.castShadow = true; rArmRGroup.add(rArmR); uGroup.add(rArmRGroup);
+            const rLegLGroup = new THREE.Group(); rLegLGroup.position.set(-0.5, 2, 0); const rLegL = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), pantsMat); rLegL.position.y = -1; rLegL.castShadow = true; rLegLGroup.add(rLegL); pGroup.add(rLegLGroup);
+            const rLegRGroup = new THREE.Group(); rLegRGroup.position.set(0.5, 2, 0); const rLegR = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), pantsMat); rLegR.position.y = -1; rLegR.castShadow = true; rLegRGroup.add(rLegR); pGroup.add(rLegRGroup);
+            pGroup.add(createNameTag(name));
+            
+            return { 
+                mesh: pGroup, uGroup, head: rHead, torso: rTorso, 
+                legL: rLegLGroup, legR: rLegRGroup, armL: rArmLGroup, armR: rArmRGroup, 
+                armLMesh: rArmL, armRMesh: rArmR, legLMesh: rLegL, legRMesh: rLegR,
+                targetPos: new THREE.Vector3(), targetRot: 0, isMoving: false, walkTime: 0, name: name, lastChatId: 0, currentEmote: "", isDead: false 
+            };
+        }
+
+        socket.on('playerMoved', (data) => {
+            if (!peers[data.id]) {
+                peers[data.id] = createRemoteBaboom(data.name);
+                scene.add(peers[data.id].mesh);
+                updatePlayerList(); 
+            }
+            const p = peers[data.id];
+            p.targetPos.set(data.x, data.y, data.z);
+            p.targetRot = data.rot;
+            p.isMoving = data.moving;
+            p.currentEmote = data.emote || ""; 
+            p.isDead = data.dead || false; 
+            
+            if (data.chatMsg && data.chatId && data.chatId !== p.lastChatId) {
+                p.lastChatId = data.chatId; 
+                appendToChatBox(data.name, data.chatMsg);
+                showChatBubble(p.mesh, data.chatMsg);
+            }
+        });
+
+        socket.on('playerDisconnected', (id) => {
+            if (peers[id]) {
+                healCharacter(peers[id].mesh); // Clean up exploded parts if they disconnect while dead
+                scene.remove(peers[id].mesh);
+                delete peers[id];
+                updatePlayerList(); 
+            }
+        });
+
+        // ==========================================
+        // REAL PHYSICS DEATH LOGIC (THE LEGO SHATTER)
+        // ==========================================
+        let isDead = false; 
+        const fallingParts = [];
+
+        function shatterCharacter(charGroup, partsArray) {
+            const dropped = [];
+            partsArray.forEach(part => {
+                const clone = part.clone(); // Clones the body part AND the face sticker if it has one!
+                
+                const worldPos = new THREE.Vector3();
+                part.getWorldPosition(worldPos);
+                const worldQuat = new THREE.Quaternion();
+                part.getWorldQuaternion(worldQuat);
+                
+                clone.position.copy(worldPos);
+                clone.quaternion.copy(worldQuat);
+                clone.scale.set(1,1,1);
+                
+                // Explode outward with random velocity!
+                clone.userData.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.4, 
+                    Math.random() * 0.3 + 0.1, 
+                    (Math.random() - 0.5) * 0.4
+                );
+                // Tumbling rotation
+                clone.userData.rotVelocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.3,
+                    (Math.random() - 0.5) * 0.3,
+                    (Math.random() - 0.5) * 0.3
+                );
+                
+                scene.add(clone);
+                fallingParts.push(clone);
+                dropped.push(clone);
+            });
+            charGroup.visible = false; // Hide the connected body
+            charGroup.userData.droppedParts = dropped;
+        }
+
+        function healCharacter(charGroup) {
+            if (charGroup.userData.droppedParts) {
+                charGroup.userData.droppedParts.forEach(p => {
+                    scene.remove(p);
+                    const index = fallingParts.indexOf(p);
+                    if (index > -1) fallingParts.splice(index, 1);
+                });
+                charGroup.userData.droppedParts = null;
+            }
+            charGroup.visible = true; // Show the connected body again
+        }
+
+        document.getElementById('btn-respawn').addEventListener('click', () => {
+            if (isDead) return; 
+            isDead = true; 
+            menuOpen = false; 
+            menuEl.style.display = 'none'; 
+            document.body.requestPointerLock();
+
+            // INSTANTLY SHATTER THE PLAYER
+            shatterCharacter(player, [torso, head, armL, armR, legL, legR]);
+
+            // Wait 2.5 seconds to watch the parts bounce, then respawn
+            setTimeout(() => {
+                healCharacter(player);
+                player.position.set(0, 5, 0); 
+                velocityY = 0; 
+                isDead = false; 
+            }, 2500);
+        });
+
+        // --- CONTROLS & CAMERA ---
+        const keys = { w: false, a: false, s: false, d: false };
+        let velocityY = 0, isGrounded = true, camAngle = 0, camTilt = 0.4, walkTime = 0, shiftLock = false, jumpCounter = 0;
+        let targetZoom = 14, currentZoom = 14;
+
+        window.addEventListener('wheel', (e) => {
+            if (document.activeElement === chatInput || menuOpen) return;
+            targetZoom += Math.sign(e.deltaY) * 1.5;
+            targetZoom = Math.max(0.5, Math.min(targetZoom, 30));
+        });
+
+        function toggleShiftLock() {
+            shiftLock = !shiftLock; 
+            document.getElementById('crosshair').style.display = shiftLock ? 'block' : 'none'; 
+            document.getElementById('menu-shift-lock').innerText = shiftLock ? 'On' : 'Off';
+        }
+
+        document.getElementById('menu-shift-lock').addEventListener('click', toggleShiftLock);
+
+        document.addEventListener('keydown', (e) => {
+            if (document.activeElement === chatInput) return; 
+            
+            if (!isDead) {
+                if (e.code === 'KeyW') keys.w = true; if (e.code === 'KeyA') keys.a = true;
+                if (e.code === 'KeyS') keys.s = true; if (e.code === 'KeyD') keys.d = true;
+                if (e.code === 'Space' && isGrounded) { velocityY = 0.55; isGrounded = false; jumpCounter++; myCurrentEmote = ""; }
+                if (e.code.includes('Shift')) toggleShiftLock();
+            }
+
+            if (e.code === 'KeyI') targetZoom = Math.max(0.5, targetZoom - 2);
+            if (e.code === 'KeyO') targetZoom = Math.min(30, targetZoom + 2);  
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'KeyW') keys.w = false; if (e.code === 'KeyA') keys.a = false;
+            if (e.code === 'KeyS') keys.s = false; if (e.code === 'KeyD') keys.d = false;
+        });
+
+        window.addEventListener('mousedown', (e) => { 
+            if(menuOpen || e.target.closest('#in-game-menu') || e.target.closest('#top-bar') || e.target.closest('#chat-container') || e.target.closest('#player-list')) return;
+            if(!('ontouchstart' in window)) document.body.requestPointerLock(); 
+        });
+        
+        document.addEventListener('pointerlockchange', () => { 
+            if(!document.pointerLockElement) keys.w = keys.a = keys.s = keys.d = false;
+        });
+        document.addEventListener('mousemove', (e) => { if (document.pointerLockElement) { camAngle -= e.movementX * 0.004; camTilt = Math.max(-0.6, Math.min(1.2, camTilt + e.movementY * 0.004)); } });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            let inputX = 0, inputZ = 0;
+            
+            if (isDead) {
+                keys.w = false; keys.a = false; keys.s = false; keys.d = false;
+            } else if (document.activeElement !== chatInput) {
+                if (keys.w) inputZ -= 1; if (keys.s) inputZ += 1;
+                if (keys.a) inputX -= 1; if (keys.d) inputX += 1;
+            }
+            
+            const isMoving = inputX !== 0 || inputZ !== 0;
+            if (isMoving) myCurrentEmote = ""; 
+
+            if (isMoving) {
+                const moveVec = new THREE.Vector3(inputX, 0, inputZ).normalize();
+                moveVec.applyAxisAngle(new THREE.Vector3(0, 1, 0), camAngle);
+                const speed = 0.28;
+                player.position.x += moveVec.x * speed;
+                player.position.z += moveVec.z * speed;
+                
+                if (shiftLock || currentZoom < 1.5) {
+                    player.rotation.y = camAngle + Math.PI;
+                } else {
+                    const targetRot = Math.atan2(moveVec.x, moveVec.z);
+                    let diff = targetRot - player.rotation.y;
+                    while (diff > Math.PI) diff -= Math.PI * 2;
+                    while (diff < -Math.PI) diff += Math.PI * 2;
+                    player.rotation.y += diff * 0.15;
+                }
+            } else if (shiftLock || currentZoom < 1.5) {
+                player.rotation.y = camAngle + Math.PI;
+            }
+
+            // --- COLLISION DETECTION ---
+            for (const id in peers) {
+                const peerMesh = peers[id].mesh;
+                const dx = player.position.x - peerMesh.position.x;
+                const dz = player.position.z - peerMesh.position.z;
+                const dist = Math.sqrt(dx*dx + dz*dz);
+                const minDist = 1.5; 
+                if (dist < minDist && dist > 0.01 && !isDead) {
+                    const push = minDist - dist;
+                    player.position.x += (dx / dist) * push;
+                    player.position.z += (dz / dist) * push;
+                }
+            }
+
+            // --- ANIMATE FALLING DEAD PARTS ---
+            for (let i = fallingParts.length - 1; i >= 0; i--) {
+                const p = fallingParts[i];
+                p.userData.velocity.y -= 0.015; // Gravity
+                p.position.add(p.userData.velocity); // Move part
+                
+                // Floor Collision (Bounce and slide)
+                if (p.position.y <= 0.6) {
+                    p.position.y = 0.6;
+                    p.userData.velocity.y *= -0.4; // Bounce
+                    p.userData.velocity.x *= 0.8; // Friction
+                    p.userData.velocity.z *= 0.8;
+                    p.userData.rotVelocity.multiplyScalar(0.8); // Slow rotation
+                } else {
+                    // Spin while falling
+                    p.rotation.x += p.userData.rotVelocity.x;
+                    p.rotation.y += p.userData.rotVelocity.y;
+                    p.rotation.z += p.userData.rotVelocity.z;
+                }
+            }
+
+            // NETWORK EMIT - 20 times a second
+            if (Date.now() - lastEmitTime > 50) {
+                socket.emit('move', { 
+                    name: myName, x: player.position.x, y: player.position.y, z: player.position.z, rot: player.rotation.y, 
+                    moving: isMoving, chatMsg: myLastMessage, chatId: myLastMessageId, emote: myCurrentEmote,
+                    dead: isDead 
+                });
+                lastEmitTime = Date.now();
+            }
+
+            // ==========================================
+            // MULTIPLAYER ANIMATION LOOP
+            // ==========================================
+            for (const id in peers) {
+                const p = peers[id];
+                p.mesh.position.lerp(p.targetPos, 0.2);
+                let diff = p.targetRot - p.mesh.rotation.y;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                p.mesh.rotation.y += diff * 0.2;
+                
+                // MULTIPLAYER DEATH
+                if (p.isDead && !p.mesh.userData.isDeadState) {
+                    shatterCharacter(p.mesh, [p.torso, p.head, p.armLMesh, p.armRMesh, p.legLMesh, p.legRMesh]);
+                    p.mesh.userData.isDeadState = true;
+                } else if (!p.isDead && p.mesh.userData.isDeadState) {
+                    healCharacter(p.mesh);
+                    p.mesh.userData.isDeadState = false;
+                }
+
+                if (!p.isDead) {
+                    if (p.targetPos.y > 0.1) {
+                        // MULTIPLAYER CLASSIC JUMP
+                        p.armL.rotation.x = THREE.MathUtils.lerp(p.armL.rotation.x, -3.14, 0.2);
+                        p.armR.rotation.x = THREE.MathUtils.lerp(p.armR.rotation.x, -3.14, 0.2);
+                        p.legL.rotation.x = THREE.MathUtils.lerp(p.legL.rotation.x, 0, 0.2);
+                        p.legR.rotation.x = THREE.MathUtils.lerp(p.legR.rotation.x, 0, 0.2);
+
+                    } else if (p.isMoving) {
+                        // MULTIPLAYER SMOOTH WALK (Zero Lag!)
+                        p.walkTime += 0.25; 
+                        const swing = Math.sin(p.walkTime) * 0.8;
+                        p.armL.rotation.x = THREE.MathUtils.lerp(p.armL.rotation.x, swing, 0.2);
+                        p.armR.rotation.x = THREE.MathUtils.lerp(p.armR.rotation.x, -swing, 0.2);
+                        p.legL.rotation.x = THREE.MathUtils.lerp(p.legL.rotation.x, -swing, 0.2);
+                        p.legR.rotation.x = THREE.MathUtils.lerp(p.legR.rotation.x, swing, 0.2);
+                        p.uGroup.position.y = THREE.MathUtils.lerp(p.uGroup.position.y, 2 + Math.abs(Math.sin(p.walkTime*2)) * 0.1, 0.2);
+
+                    } else if (p.currentEmote === 'custom') {
+                        // --- PASTE MULTIPLAYER CUSTOM EMOTE HERE ---
+
+
+                    } else {
+                        p.legL.rotation.x = THREE.MathUtils.lerp(p.legL.rotation.x, 0, 0.1);
+                        p.legR.rotation.x = THREE.MathUtils.lerp(p.legR.rotation.x, 0, 0.1);
+                        p.armL.rotation.x = THREE.MathUtils.lerp(p.armL.rotation.x, 0, 0.1);
+                        p.armR.rotation.x = THREE.MathUtils.lerp(p.armR.rotation.x, 0, 0.1);
+                        p.armR.rotation.z = THREE.MathUtils.lerp(p.armR.rotation.z, 0, 0.1);
+                        
+                        p.legL.rotation.z = THREE.MathUtils.lerp(p.legL.rotation.z, 0, 0.1);
+                        p.legR.rotation.z = THREE.MathUtils.lerp(p.legR.rotation.z, 0, 0.1);
+                        
+                        p.armL.rotation.y = THREE.MathUtils.lerp(p.armL.rotation.y, 0, 0.1);
+                        p.armL.rotation.z = THREE.MathUtils.lerp(p.armL.rotation.z, 0, 0.1);
+                        p.armR.rotation.y = THREE.MathUtils.lerp(p.armR.rotation.y, 0, 0.1);
+                        p.uGroup.rotation.x = THREE.MathUtils.lerp(p.uGroup.rotation.x, 0, 0.1);
+                        p.uGroup.rotation.y = THREE.MathUtils.lerp(p.uGroup.rotation.y, 0, 0.1);
+                        p.uGroup.rotation.z = THREE.MathUtils.lerp(p.uGroup.rotation.z, 0, 0.1);
+
+                        p.uGroup.position.y = THREE.MathUtils.lerp(p.uGroup.position.y, 2, 0.1);
+                        p.walkTime = 0;
+                    }
+                }
+            }
+
+            // ==========================================
+            // LOCAL PLAYER ANIMATION LOOP
+            // ==========================================
+            if (!isDead) {
+                if (!isGrounded) {
+                    // --- CLASSIC JUMP ANIMATION ---
+                    armLGroup.rotation.x = THREE.MathUtils.lerp(armLGroup.rotation.x, -3.14, 0.2);
+                    armRGroup.rotation.x = THREE.MathUtils.lerp(armRGroup.rotation.x, -3.14, 0.2);
+                    legLGroup.rotation.x = THREE.MathUtils.lerp(legLGroup.rotation.x, 0, 0.2);
+                    legRGroup.rotation.x = THREE.MathUtils.lerp(legRGroup.rotation.x, 0, 0.2);
+
+                } else if (isMoving) {
+                    // LOCAL PLAYER SMOOTH WALK (Zero Lag!)
+                    walkTime += 0.25;
+                    const swing = Math.sin(walkTime) * 0.8;
+                    armLGroup.rotation.x = THREE.MathUtils.lerp(armLGroup.rotation.x, swing, 0.2);
+                    armRGroup.rotation.x = THREE.MathUtils.lerp(armRGroup.rotation.x, -swing, 0.2);
+                    legLGroup.rotation.x = THREE.MathUtils.lerp(legLGroup.rotation.x, -swing, 0.2);
+                    legRGroup.rotation.x = THREE.MathUtils.lerp(legRGroup.rotation.x, swing, 0.2);
+                    upperBodyGroup.position.y = THREE.MathUtils.lerp(upperBodyGroup.position.y, 2 + Math.abs(Math.sin(walkTime*2)) * 0.1, 0.2);
+
+                } else if (myCurrentEmote === 'custom') {
+                    // --- PASTE LOCAL CUSTOM EMOTE HERE ---
+
+
+                } else {
+                    let lerp = 0.1;
+                    let breath = Math.sin(Date.now() * 0.002) * 0.03;
+                    legLGroup.rotation.x = THREE.MathUtils.lerp(legLGroup.rotation.x, 0, lerp);
+                    legRGroup.rotation.x = THREE.MathUtils.lerp(legRGroup.rotation.x, 0, lerp);
+                    armLGroup.rotation.x = THREE.MathUtils.lerp(armLGroup.rotation.x, 0, lerp);
+                    armRGroup.rotation.x = THREE.MathUtils.lerp(armRGroup.rotation.x, 0, lerp);
+                    armRGroup.rotation.z = THREE.MathUtils.lerp(armRGroup.rotation.z, 0, lerp);
+                    
+                    legLGroup.rotation.z = THREE.MathUtils.lerp(legLGroup.rotation.z, 0, lerp);
+                    legRGroup.rotation.z = THREE.MathUtils.lerp(legRGroup.rotation.z, 0, lerp);
+                    
+                    armLGroup.rotation.y = THREE.MathUtils.lerp(armLGroup.rotation.y, 0, lerp);
+                    armLGroup.rotation.z = THREE.MathUtils.lerp(armLGroup.rotation.z, 0, lerp);
+                    armRGroup.rotation.y = THREE.MathUtils.lerp(armRGroup.rotation.y, 0, lerp);
+                    upperBodyGroup.rotation.x = THREE.MathUtils.lerp(upperBodyGroup.rotation.x, 0, lerp);
+                    upperBodyGroup.rotation.y = THREE.MathUtils.lerp(upperBodyGroup.rotation.y, 0, lerp);
+                    upperBodyGroup.rotation.z = THREE.MathUtils.lerp(upperBodyGroup.rotation.z, 0, lerp);
+
+                    upperBodyGroup.position.y = THREE.MathUtils.lerp(upperBodyGroup.position.y, 2 + breath, lerp);
+                    walkTime = 0;
+                }
+            }
+
+            velocityY -= 0.025; player.position.y += velocityY;
+            if (player.position.y <= 0) { player.position.y = 0; velocityY = 0; isGrounded = true; }
+
+            // --- CAMERA ZOOM LOGIC ---
+            currentZoom = THREE.MathUtils.lerp(currentZoom, targetZoom, 0.1);
+            
+            let pOpacity = Math.max(0, Math.min(1, (currentZoom - 1.5) / 1.5)); 
+            player.traverse((child) => {
+                if (child.isMesh && !child.isSprite && child.material) {
+                    child.material.transparent = true; child.material.opacity = pOpacity; child.material.depthWrite = pOpacity > 0.5; 
+                }
+            });
+            player.visible = (!isDead && pOpacity > 0.05); // Completely hide if dead or in first person
+
+            const isFirstPerson = currentZoom < 1.5;
+            const sideOffset = (shiftLock && !isFirstPerson) ? 3 : 0; 
+            const offsetVec = new THREE.Vector3(sideOffset, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), camAngle);
+
+            if (isFirstPerson) {
+                camera.position.x = player.position.x;
+                
+                // Drop camera to floor if dead in first person!
+                const camHeight = (isDead) ? 0.5 : 3.2;
+                camera.position.y = player.position.y + camHeight; 
+                camera.position.z = player.position.z;
+                
+                const targetX = player.position.x + Math.sin(camAngle + Math.PI);
+                const targetY = player.position.y + camHeight - (camTilt * 2);
+                const targetZ = player.position.z + Math.cos(camAngle + Math.PI);
+                
+                camera.lookAt(targetX, targetY, targetZ);
+            } else {
+                camera.position.x = player.position.x + Math.sin(camAngle) * currentZoom + offsetVec.x;
+                camera.position.y = player.position.y + 6 + (camTilt * (currentZoom * 0.7)); 
+                camera.position.z = player.position.z + Math.cos(camAngle) * currentZoom + offsetVec.z;
+                
+                camera.lookAt(player.position.x + offsetVec.x, player.position.y + 2, player.position.z + offsetVec.z);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+        animate();
+    </script>
+</body>
+</html>
